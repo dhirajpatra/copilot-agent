@@ -1,1 +1,7 @@
 COPILOT_PATH=/home/dhiraj/.config/Code/User/globalStorage/github.copilot-chat/copilotCli/copilot
+OPENAI_API_KEY=your_openai_api_key_here
+AZURE_OPENAI_ENDPOINT=your_azure_openai_endpoint_here
+AZURE_OPENAI_API_KEY=your_azure_openai_api_key_here
+AZURE_OPENAI_CHAT_DEPLOYMENT_NAME=your_chat_deployment_name_here
+AZURE_OPENAI_GPT4_DEPLOYMENT_NAME=your_gpt4_deployment_name_here
+GITHUB_TOKEN=your_github_token_here

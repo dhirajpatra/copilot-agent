@@ -3,7 +3,7 @@ import os
 import shutil
 from pathlib import Path
 import sys
-from typing import cast
+from typing import cast, List
 from dotenv import load_dotenv
 from tools import get_weather
 from agent_framework import ChatMessage, Role, SequentialBuilder, WorkflowOutputEvent
@@ -12,6 +12,12 @@ from agent_framework.azure import AzureOpenAIChatClient
 from copilot.types import PermissionRequest, PermissionRequestResult
 from copilot.types import MCPServerConfig
 from azure.identity import AzureCliCredential
+from capabilities import (
+    Capability,
+    CapabilityType,
+    AgentCapabilities,
+    capability_registry,
+)
 
 
 def ensure_copilot_available():
@@ -50,11 +56,68 @@ def prompt_permission(
     return PermissionRequestResult(kind="denied-interactively-by-user")
 
 
+def register_agent_capabilities(
+    agent_name: str, agent_id: str, caps: List[Capability]
+) -> None:
+    """Register an agent's capabilities in the UCP registry."""
+    agent_caps = AgentCapabilities(agent_name=agent_name, agent_id=agent_id)
+    for cap in caps:
+        agent_caps.add_capability(cap)
+    capability_registry.register_agent(agent_caps)
+
+
+def check_azure_config() -> bool:
+    """Check if Azure OpenAI is properly configured."""
+    required_vars = [
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_CHAT_DEPLOYMENT_NAME",
+    ]
+    missing = [var for var in required_vars if not os.environ.get(var)]
+    if missing:
+        print(
+            f"\n[SKIP] Azure Workflow demo - Missing environment variables: {', '.join(missing)}"
+        )
+        print("       To enable, set these in your .env or environment:")
+        for var in required_vars:
+            print(f"       - {var}")
+        return False
+    return True
+
+
 async def demo_workflow():
     """Run a sequential workflow: Azure OpenAI writer -> GitHub Copilot reviewer."""
     print("\n=== Starting Workflow Demo: Writer → Reviewer ===\n")
 
+    # Check Azure configuration before attempting to create client
+    if not check_azure_config():
+        return
+
     try:
+        # Register writer capabilities
+        writer_caps = [
+            Capability(
+                name="copywrite",
+                capability_type=CapabilityType.COPYWRITING,
+                description="Generate concise marketing copy and taglines",
+                parameters={"prompt": "string"},
+                required_permissions=["content_generation"],
+            )
+        ]
+        register_agent_capabilities("writer", "agent-writer-001", writer_caps)
+
+        # Register reviewer capabilities
+        reviewer_caps = [
+            Capability(
+                name="review_content",
+                capability_type=CapabilityType.REVIEW,
+                description="Review and provide feedback on content",
+                parameters={"content": "string"},
+                required_permissions=["content_review"],
+            )
+        ]
+        register_agent_capabilities("reviewer", "agent-reviewer-001", reviewer_caps)
+
         # Create an Azure OpenAI agent as a copywriter
         chat_client = AzureOpenAIChatClient(credential=AzureCliCredential())
 
@@ -86,12 +149,38 @@ async def demo_workflow():
                     )
                     print(f"[{name}]: {msg.text}\n")
     except Exception as e:
-        print(f"Workflow demo error (Azure credentials may not be configured): {e}")
+        print(f"[ERROR] Workflow demo failed: {e}")
 
 
 async def demo_copilot_with_tools():
     """Run the original Copilot agent with MCP servers and weather tools."""
     print("\n=== Starting Copilot Demo: Tools & Filesystem ===\n")
+
+    # Register Copilot agent capabilities
+    copilot_caps = [
+        Capability(
+            name="get_weather",
+            capability_type=CapabilityType.WEATHER,
+            description="Get weather information for a location",
+            parameters={"location": "string"},
+            required_permissions=["weather_access"],
+        ),
+        Capability(
+            name="list_files",
+            capability_type=CapabilityType.FILESYSTEM,
+            description="List files in the filesystem",
+            parameters={"directory": "string"},
+            required_permissions=["filesystem_access"],
+        ),
+        Capability(
+            name="analysis",
+            capability_type=CapabilityType.ANALYSIS,
+            description="Analyze and provide insights on data or content",
+            parameters={"content": "string"},
+            required_permissions=["analysis"],
+        ),
+    ]
+    register_agent_capabilities("copilot", "agent-copilot-001", copilot_caps)
 
     mcp_servers: dict[str, MCPServerConfig] = {
         # Local stdio server
@@ -134,15 +223,53 @@ async def demo_copilot_with_tools():
         print(result)
 
 
+async def demo_ucp_discovery():
+    """Demonstrate UCP capability discovery and management."""
+    print("\n=== UCP Capability Discovery Demo ===\n")
+
+    # Print the registry
+    capability_registry.print_registry()
+
+    # Demonstrate capability queries
+    print("=== Capability Queries ===\n")
+
+    # Find agents that can provide weather
+    weather_agents = capability_registry.get_all_capabilities_by_type(
+        CapabilityType.WEATHER
+    )
+    print(f"Agents providing WEATHER capabilities: {list(weather_agents.keys())}")
+
+    # Find agents that can review
+    review_agents = capability_registry.get_all_capabilities_by_type(
+        CapabilityType.REVIEW
+    )
+    print(f"Agents providing REVIEW capabilities: {list(review_agents.keys())}")
+
+    # Check if specific agent can perform capability
+    has_weather = capability_registry.can_agent_perform(
+        "agent-copilot-001", "get_weather"
+    )
+    print(f"Can Copilot agent get weather? {has_weather}")
+
+    # Find agent for capability
+    reviewer_id = capability_registry.find_agent_for_capability("review_content")
+    print(f"Agent that can review content: {reviewer_id}")
+
+
 async def main():
     # Load .env (if present) so users can set COPILOT_PATH there
     load_env_file()
 
     ensure_copilot_available()
 
-    # Run both demos
+    # Run demos
+    print("\n" + "=" * 60)
+    print("MULTI-AGENT APPLICATION WITH UCP CAPABILITIES")
+    print("=" * 60)
+
     await demo_workflow()
     await demo_copilot_with_tools()
+    await demo_ucp_discovery()
 
 
 if __name__ == "__main__":
